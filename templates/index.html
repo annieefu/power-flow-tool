@@ -1,0 +1,1757 @@
+<!-- POWER FLOW TOOL V1.0 -->
+<!-- Developed for Smart Wires, Inc. by Annie Fu and Carlos Toledo -->
+<!-- December 2020 - February 2021 -->
+
+
+<!-- OVERVIEW -->
+<!-- The repository for this project can be found at https://gitlab.com/smartwires/general/power-flow-tool. -->
+<!-- The Power Flow Tool is a dynamic power flow visualization tool developed with HTML, CSS, and the D3.js library in JavaScript
+  in the front-end and Python in the back-end. Back-end processing is done with the package
+  Pandapower. Flask is used to facilitate communication between the front-end and back-end. -->
+
+<!-- The purpose of the tool is to demonstrate how installing SmartValve technology onto a grid can moderate line overloads and optimize
+grid efficiency.-->
+<!-- Est. Duration: ~120 hrs -->
+
+
+<!-- SYSTEM COMPONENTS -->
+<!-- Topojson Map -->
+  <!-- The Map background is generated through a topojson file, rendered through D3.js and stored in variable map_background_svg. -->
+<!-- Power Grid -->
+<!-- System Overview Menu -->
+  <!-- The System Overview displays calculated parameters of Additional Load Enabled, MW Pulled, MW Pushed, # Deployments,
+  SmartValve Capacity, and Total Voltage Injected. These parameters are calculated in app.py in Python, then returned through 
+  json data stored in variable SVResults. -->
+<!-- Line Overview Menu -->
+    <!-- The Line Overview Menu displays parameters returned by Pandapower and calculated in Python, including Power,
+    Current, Resistance, Reactance, Length, Maximum Current, and MVar per phase. These parameters are calculated in app.py, then 
+    returned through json data stored in variable LineResults. -->
+<!-- SmartValve Controls Menu -->
+    <!-- The SmartValve Controls Menu allows the user to edit details of SmartValve deployments, including voltage injection, push/pull mode, 
+    and quantity. Sub-components include a sliding toggle for push/pull, a slider for voltage injection, and buttons for changing quantity. -->
+
+<head>
+  <!-- import d3.js library-->
+  <script src="https://d3js.org/d3.v6.js"></script>
+  <script src="https://d3js.org/d3.v5.min.js"></script>
+  <!-- Load TopoJson for Map -->
+  <script src="https://d3js.org/topojson.v2.min.js"></script>
+  <!-- Load Fonts -->
+  <link href="https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;700&display=swap" rel="stylesheet">
+  <link rel="preconnect" href="https://fonts.gstatic.com">
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@200;300;400;500&display=swap" rel="stylesheet">
+
+  <!-- Script for SmartValve Control Slider -->
+  <script src="https://unpkg.com/d3-simple-slider"></script>
+
+</head>
+<style>
+  #map_background_svg {
+    background: rgb(173, 236, 255);
+    border-style: solid;
+    border-color: white;
+    border-width: 5px;
+    -webkit-box-shadow: 3px 3px 5px 6px #ccc;
+    /* Safari 3-4, iOS 4.0.2 - 4.2, Android 2.3+ */
+    -moz-box-shadow: 3px 3px 5px 6px #ccc;
+    /* Firefox 3.5 - 3.6 */
+    box-shadow: 3px 3px 5px 6px #ccc;
+  }
+
+  #grid {
+    z-index: 0;
+  }
+
+  body {
+    padding: 20px;
+  }
+
+
+  /* Previously used to style the external navigation links on the page, leading to other pages
+  of the website. */
+  .nav-link {
+    color: slategrey;
+    font-size: 20px;
+    display: inline-flex;
+    order: 1;
+    margin-top: -50px;
+    margin-left: 55px;
+    text-decoration: none;
+    font-family: 'Arial'
+  }
+</style>
+
+<body>
+  <div class="nav-bar" style="display: inline;">
+
+    <img src="{{url_for('static', filename='images/logo.png')}}" margin-left="140px" height="90px"
+      style="display: inline;" />
+
+
+    <!-- Links for External Navigation -->
+    <ul style=" list-style: none; display: inline-flex; margin-left: 50vw; ">
+      <!-- <li><a href="/" class="nav-link"> Link 1</a></li>
+      <li><a href="/" class="nav-link"> Link 2</a></li>
+      <li><a href="/" class="nav-link"> Link 3</a></li> -->
+    </ul>
+
+  </div>
+
+  <!--SVG for Map Background-->
+  <svg id="map_background_svg" height="38rem" width="83rem"></svg>
+  <script>
+
+    // Return the initialized SmartValve Information Json into variable INFOSV
+    var INFOSV = JSON.parse('{{ SVinfofile|safe }}');
+    console.log(INFOSV)
+
+    // Return the initialized Line Information Json into variable INFOLINES
+    var INFOLINES = JSON.parse('{{ InfoLinesFile|safe }}');
+    console.log(INFOLINES)
+
+
+    // INITIALIZING VARIABLES
+    // The svg canvas on which the topojson map is generated.
+    const map_background_svg = d3.select("#map_background_svg");
+    // Width and height of the map window, adjusted by screen size.
+    var width;
+    var height;
+
+    // Tracks whether the three-fold menu is visible or not. 
+    // 0 for hidden, 1 for visible.
+    var menu_vis = 0;
+    // Tracks the name of the line that is currently selected.
+    var line_name;
+    // The converted json index number from line number.
+    var convert_number;
+    // Tracks the conversion from the colloquial Line Name, to the corresponding index within the JSON files.
+    var corrected_line_index;
+    // The number of the line that is currently selected.
+    var current_line;
+    // Similar to current_line, but is used for the Line Overview menu. Allows the user to view a different Line Overview
+    // than the Line controlled in the SmartValve Controls menu.
+    var current_line_menu = 4;
+    var results_json;
+
+    var slider4_val = 0;
+    var megawatts = 0;
+
+
+    var perc1 = INFOLINES[3].loading;
+    var perc2 = INFOLINES[2].loading;
+    var perc3 = INFOLINES[1].loading;
+    var perc4 = INFOLINES[0].loading;
+    var sv_quant_array = [0, 0, 0, 0]; // 0 if off, 1 if on
+    var sv_pushpull_array = [Number(0), Number(0), Number(0), Number(0)];
+    var sv_id_array = ["line1sv", "line2sv", "line3sv", "line4sv"];
+    var sv_use_array = [1, 1, 1, 1];
+
+    // LINE POWER VARIABLES
+    var line_power_array = [0, 1, 1, 1];
+    var line_name_array = ["Line 1", "Line 2", "Line 3", "Line 4"]
+
+    // LOAD VARIABLE
+    var load = 1000;
+
+
+
+    // color codes
+    zero_forty = "#89FF7E";
+    fourty_sixty = "#82FA19";
+    sixty_eighty = "#FFFA70";
+    eighty_hundred = "#FCB573";
+    over_hundred = "#FF5C5C";
+
+    const requestData = async function () {
+      // Call the device screensize
+      width = map_background_svg.node().getBoundingClientRect().width;
+      height = map_background_svg.node().getBoundingClientRect().height;
+      // put it in updatechart function
+      // console.log(map_background_svg.node().getBoundingClientRect())
+
+
+      // POWER FLOW DATA
+
+      // Map of England
+
+      const map_uk = await d3.json("{{url_for('static', filename='json/topo_uk.json')}}");
+      console.log(map_uk)
+
+      // UK Map
+      const map = map_background_svg.append("g").on("click", close_menu);
+      const grid_elements = map_background_svg.append("g")
+      var areas = topojson.feature(map_uk, map_uk.objects.eer);
+      var areasMesh = topojson.mesh(map_uk, map_uk.objects.eer);
+      var projection = d3.geoMercator().fitSize([width, height], areas);
+      var path = d3.geoPath().projection(projection);
+      // Fill
+      let the_map = map.selectAll("path.area_fill")
+        .data(areas.features)
+        .join("path")
+        .attr("class", "area_fill")
+        .attr("d", path)
+        .attr("z-index", "0")
+        .attr("fill", "rgb(145, 205, 154)")
+        .attr('transform', 'translate(-80,0)');
+
+      // Outlines simulating datum + join
+      let map_outline = map.selectAll("path.area_outline")
+        .data([areasMesh])
+        .join("path")
+        .attr("class", "area_outline")
+        .attr("d", path)
+        .attr("z-index", "0")
+        .attr("fill", "none")
+        .attr("stroke", "rgb(240, 255, 237)")
+        .attr("stroke-width", "1.5px")
+        .style("stroke-linejoin", "round")
+        .attr('transform', 'translate(-80,0)');
+
+
+      // TODO after MVP: a shortest distance algorithm to pull transmission lines into the right position,
+      // based on the svg coordinate grid.
+      function shortest_distance(x1, y1, x2, y2) {
+      }
+
+
+      // TOOLTIP DATA
+      let tooltip_0 = await d3.json("{{url_for('static', filename='json/topo_uk.json')}}"); // Base Case
+
+
+      let tooltip_width = 205;
+      let tooltip_height = 204;
+
+      // now add the tooltip
+      let tooltip = map_background_svg.append("g")
+        .attr("class", "tooltip")
+        .attr("id", "tooltip_id")
+        .attr("visibility", "hidden")
+        .style("z-index", 99);
+
+      tooltip.append("rect")
+        .attr("fill", "white")
+        .attr("opacity", 1)
+        .attr("x", 10)
+        .attr("y", 10)
+        .style("z-index", 99)
+        .attr("width", tooltip_width)
+        .attr("height", tooltip_height);
+
+
+      tooltip.append("text")
+        .attr("fill", "#EC3115")
+        .attr("font-size", "22px")
+        .text("LINE OVERVIEW")
+        .attr("font-family", "'Poppins', sans-serif")
+        .attr("x", 18)
+        .attr("y", 36);
+
+
+      tooltip.append("text")
+        .attr("fill", "black")
+        .attr("font-size", "22px")
+        .attr("font-weight", "600")
+        .text("X")
+        .on("mouseover", function () { return tooltip.style("cursor", "pointer") })
+        .on("click", function () { return tooltip.style("visibility", "hidden") })
+        .attr("font-family", "'Poppins', sans-serif")
+        .attr("x", 193)
+        .attr("y", 36);
+
+
+      let line_names_buses = tooltip.append("text")
+        .attr("fill", "#0A0908")
+        .attr("font-family", "'Poppins', sans-serif")
+        .attr("color", "#0A0908")
+        .attr("font-weight", "500")
+        .attr("font-size", "13px")
+        .attr("text-anchor", "left")
+        .attr("alignment-baseline", "hanging")
+        .attr("x", 18)
+        .attr("y", 46);
+
+      let act_power = tooltip.append("text")
+        .attr("fill", "#0A0908")
+        .attr("font-family", "'Poppins', sans-serif")
+        .attr("font-size", "13px")
+        .attr("font-weight", "300")
+        .attr("text-anchor", "left")
+        .attr("alignment-baseline", "hanging")
+        .attr("x", 18)
+        .attr("y", 66);
+
+
+      let current = tooltip.append("text")
+        .attr("fill", "#0A0908")
+        .attr("font-family", "'Poppins', sans-serif")
+        .attr("font-size", "13px")
+        .attr("font-weight", "300")
+        .attr("text-anchor", "left")
+        .attr("alignment-baseline", "hanging")
+        .attr("x", 18)
+        .attr("y", 86);
+
+
+
+      let resistance = tooltip.append("text")
+        .attr("fill", "#0A0908")
+        .attr("font-family", "'Poppins', sans-serif")
+        .attr("font-size", "13px")
+        .attr("font-weight", "300")
+        .attr("text-anchor", "left")
+        .attr("alignment-baseline", "hanging")
+        .attr("x", 18)
+        .attr("y", 106);
+
+      let final_reactance = tooltip.append("text")
+        .attr("fill", "#0A0908")
+        .attr("font-family", "'Poppins', sans-serif")
+        .attr("font-size", "13px")
+        .attr("font-weight", "600")
+        .attr("text-anchor", "left")
+        .attr("alignment-baseline", "hanging")
+        .attr("x", 18)
+        .attr("y", 126);
+
+
+      let length = tooltip.append("text")
+        .attr("fill", "#0A0908")
+        .attr("font-family", "'Poppins', sans-serif")
+        .attr("font-size", "13px")
+        .attr("font-weight", "300")
+        .attr("text-anchor", "left")
+        .attr("alignment-baseline", "hanging")
+        .attr("x", 18)
+        .attr("y", 146);
+
+
+      let max_current = tooltip.append("text")
+        .attr("fill", "#0A0908")
+        .attr("font-family", "'Poppins', sans-serif")
+        .attr("font-size", "13px")
+        .attr("font-weight", "300")
+        .attr("text-anchor", "left")
+        .attr("alignment-baseline", "hanging")
+        .attr("x", 18)
+        .attr("y", 166);
+
+
+      let mvar_per_phase = tooltip.append("text")
+        .attr("fill", "#0A0908")
+        .attr("font-family", "'Poppins', sans-serif")
+        .attr("font-size", "13px")
+        .attr("font-weight", "300")
+        .attr("text-anchor", "left")
+        .attr("alignment-baseline", "hanging")
+        .attr("x", 18)
+        .attr("y", 186);
+
+
+
+
+      function show_lineinfo() {
+        three_menu.style("visibility", "hidden");
+        addsv_button.style("visibility", "hidden");
+        tooltip.style("visibility", "visible").style("z-index", 100);
+
+        update_tooltip(current_line_menu, INFOLINES)
+      }
+
+
+      // CREATE the SmartValve Control Panel
+      let sv_controls_width = 290;
+      let sv_controls_height = 230;
+
+      // now add the tooltip
+      let sv_controls = map_background_svg.append("g")
+        .attr("class", "sv_controls")
+        .attr("id", "sv_controls_id")
+        .attr("visibility", "hidden")
+        .style("z-index", 99);
+
+      sv_controls.append("rect")
+        .attr("fill", "white")
+        .attr("opacity", 1)
+        .attr("x", 20)
+        .attr("y", 370)
+        .style("z-index", 99)
+        .attr("width", sv_controls_width)
+        .attr("height", sv_controls_height);
+
+
+      sv_controls.append("text")
+        .attr("fill", "#EC3115")
+        .attr("font-size", "22px")
+        .text("SMARTVALVE CONTROLS")
+        .attr("font-family", "'Poppins', sans-serif")
+        .attr("x", 36)
+        .attr("y", 400);
+
+      let controls_linename = sv_controls.append("text")
+        .attr("fill", "grey")
+        .attr("font-size", "18px")
+        .attr("font-family", "'Poppins', sans-serif")
+        .attr("x", 36)
+        .attr("y", 426);
+
+
+      let vinj_controls = sv_controls.append("text")
+        .attr("fill", "grey")
+        .attr("font-size", "16px")
+        .attr("font-family", "'Poppins', sans-serif")
+        .attr("x", 36)
+        .attr("y", 443);
+
+      sv_controls.append("rect")
+        .attr("fill", "lightgrey")
+        .attr("x", 128)
+        .attr("y", 456)
+        .attr("width", "60px")
+        .attr("height", "26px")
+        .attr("rx", 12)
+        .attr("ry", 12);
+
+      //pushpull button
+      let pushpull_button = sv_controls.append("circle")
+        .attr("fill", "white")
+        .attr("cx", 143)
+        .attr("cy", 468)
+        .attr("r", 15)
+        .attr("stroke", "grey")
+        .attr("stroke-width", "2px")
+        .on("click", toggle_pushpull)
+        .on("mouseover", function () { pushpull_button.style("cursor", "pointer") });
+
+
+      let pull_text = sv_controls.append("text")
+        .attr("fill", "grey")
+        .attr("font-size", "18px")
+        .attr("font-family", "'Poppins', sans-serif")
+        .text("Pull")
+        .attr("x", 86)
+        .attr("y", 476);
+
+
+      let push_text = sv_controls.append("text")
+        .attr("fill", "grey")
+        .attr("font-size", "18px")
+        .attr("font-family", "'Poppins', sans-serif")
+        .text("Push")
+        .attr("x", 197)
+        .attr("y", 476);
+
+      // SmartValve Quantity Controls: Displays the quantity of SV, as well as the button components to add/subtract SV.
+      let quantity_controls = sv_controls.append("g")
+        .attr("id", "quantity_controls")
+      quantity_controls.append("rect")
+        .attr("x", 98)
+        .attr("y", 502)
+        .attr("width", 30)
+        .attr("height", 30)
+        .attr("fill", "lightgrey")
+        .on("click", subtract_quantity)
+
+      // Subtract Button. On click, triggers subtract_quantity.
+      let quantity_subtract = quantity_controls.append("text")
+        .text("-")
+        .attr("x", 105)
+        .attr("y", 527)
+        .attr("font-family", "'Poppins','sans-serif'")
+        .attr("font-size", "28px")
+        .attr("color", "black")
+        .on("click", subtract_quantity)
+        .on("mouseover", function () { quantity_subtract.style("cursor", "pointer") });
+      quantity_controls.append("rect")
+        .attr("x", 195)
+        .attr("y", 502)
+        .attr("width", 30)
+        .attr("height", 30)
+        .attr("fill", "lightgrey")
+        .on("click", add_quantity)
+
+      // Add Button. On click, triggers add_quantity.
+      let quantity_add = quantity_controls.append("text")
+        .text("+")
+        .attr("x", 200)
+        .attr("y", 528)
+        .attr("font-family", "'Poppins','sans-serif'")
+        .attr("font-size", "28px")
+        .attr("color", "black")
+        .on("click", add_quantity)
+        .on("mouseover", function () { quantity_add.style("cursor", "pointer") });
+      quantity_controls.append("rect")
+        .attr("x", 145)
+        .attr("y", 502)
+        .attr("width", 30)
+        .attr("height", 30)
+        .attr("fill", "lightgrey")
+
+      // Displays the numerical quantity of SV on the respective line.
+      let quantity_count = quantity_controls.append("text")
+        .text("1")
+        .attr("x", 154)
+        .attr("y", 526)
+        .attr("id", "quantity_count")
+        .attr("font-family", "'Poppins','sans-serif'")
+        .attr("font-size", "21px")
+        .attr("color", "black")
+
+      // The SmartValve slider. Range from 0-100 with ticks in increments of 10, allowing the user to 
+      // drag and change the value of injection into the SmartValve.
+      var sv_slider = sv_controls.append("g")
+        .attr('width', 315)
+        .attr('height', 100)
+        .attr('transform', 'translate(80,540)')
+      let sliderStep = d3
+        .sliderBottom()
+        .min(0)
+        .max(100) // repopulate with the new value
+        .width(150)
+        .tickFormat(d3.format('100'))
+        .ticks(10)
+        .step(10)
+        .default(100)
+        .on('onchange', (val) => {
+          slides(val)
+        });
+      var gStep = sv_slider.append("svg")
+        .attr('width', 300)
+        .attr('height', 100)
+        .append('g')
+      // Renders the slider.
+      var slider_step = gStep.call(sliderStep)
+        .attr("id", "theslider");
+
+      var slider = document.getElementById('theslider')
+
+      slider.onchange = slides
+
+      // Function to handle changes in slider value events. Feeds new value to the appropriate index in 
+      // sv_use_array, then updates the grid.
+      // PARAMETERS: val: Must be numerical between 0 and 1.
+      function slides(val) {
+        let line_id = String("line" + current_line_menu)
+        let sv_id = String(line_id + "sv")
+        sv_use_array[current_line_menu - 1] = val / 100;
+        update_svcontrols(sv_id)
+      }
+
+      // Creates the System Overview. Contains components added
+      system_overview = grid_elements.append("g")
+      system_overview.append("rect")
+        .attr("x", 1000)
+        .attr("y", 15)
+        .attr("width", 310)
+        .attr("height", 240)
+        .style('fill', "white")
+      system_overview.append("text")
+        .attr("x", 1060)
+        .attr("y", 42)
+        .attr("font-family", "'Poppins','sans-serif'")
+        .attr("font-size", "22px")
+        .text("SYSTEM OVERVIEW")
+        .style('fill', "#ec3204")
+
+      var added_loading = system_overview.append("text")
+        .attr("x", 1016)
+        .attr("y", 74)
+        .attr("font-weight", "800")
+        .attr("text-anchor", "right")
+        .attr("font-family", "'Poppins','sans-serif'")
+        .attr("font-size", "23px")
+        .text(load - 1000 + " MW")
+        .style("fill", "red")
+
+      system_overview.append("text")
+        .attr("x", 1106)
+        .attr("y", 74)
+        .attr("font-weight", "300")
+        .attr("text-anchor", "right")
+        .attr("font-family", "'Poppins','sans-serif'")
+        .attr("font-size", "16px")
+        .text("Additional Load Enabled")
+        .style('fill', "grey")
+
+      let pulled_mw = system_overview.append("text")
+        .attr("x", 1016)
+        .attr("y", 120)
+        .attr("font-weight", "800")
+        .attr("text-anchor", "right")
+        .attr("font-family", "'Poppins','sans-serif'")
+        .attr("font-size", "21px")
+        .text("0" + " MW")
+        .style('fill', "grey")
+      system_overview.append("text")
+        .attr("x", 1100)
+        .attr("y", 120)
+        .attr("font-weight", "300")
+        .attr("text-anchor", "right")
+        .attr("font-family", "'Poppins','sans-serif'")
+        .attr("font-size", "16px")
+        .text("Pulled")
+        .style('fill', "grey")
+
+      let pushed_mw = system_overview.append("text")
+        .attr("x", 1152)
+        .attr("y", 120)
+        .attr("font-weight", "800")
+        .attr("text-anchor", "right")
+        .attr("font-family", "'Poppins','sans-serif'")
+        .attr("font-size", "21px")
+        .text("0" + " MW")
+        .style('fill', "grey")
+      system_overview.append("text")
+        .attr("x", 1242)
+        .attr("y", 120)
+        .attr("font-weight", "300")
+        .attr("text-anchor", "right")
+        .attr("font-family", "'Poppins','sans-serif'")
+        .attr("font-size", "16px")
+        .text("Pushed")
+        .style('fill', "grey")
+
+      let number_sv = system_overview.append("text")
+        .attr("x", 1146)
+        .attr("y", 157)
+        .attr("font-weight", "800")
+        .attr("text-anchor", "right")
+        .attr("font-family", "'Poppins','sans-serif'")
+        .attr("font-size", "23px")
+        .text("0")
+        .style('fill', "grey")
+      system_overview.append("text")
+        .attr("x", 1196)
+        .attr("y", 157)
+        .attr("font-weight", "300")
+        .attr("text-anchor", "right")
+        .attr("font-family", "'Poppins','sans-serif'")
+        .attr("font-size", "16px")
+        .text("Deployments")
+        .style('fill', "grey")
+
+      let sv_capacity = system_overview.append("text")
+        .attr("x", 1016)
+        .attr("y", 196)
+        .attr("font-weight", "800")
+        .attr("text-anchor", "right")
+        .attr("font-family", "'Poppins','sans-serif'")
+        .attr("font-size", "23px")
+        .text("0%")
+        .style('fill', "grey")
+      system_overview.append("text")
+        .attr("x", 1085)
+        .attr("y", 196)
+        .attr("font-weight", "300")
+        .attr("text-anchor", "right")
+        .attr("font-family", "'Poppins','sans-serif'")
+        .attr("font-size", "16px")
+        .text("SmartValve Capacity Used")
+        .style('fill', "grey")
+
+      let volt_injected = system_overview.append("text")
+        .attr("x", 1016)
+        .attr("y", 238)
+        .attr("font-weight", "800")
+        .attr("text-anchor", "right")
+        .attr("font-family", "'Poppins','sans-serif'")
+        .attr("font-size", "23px")
+        .text("0" + " kv")
+        .style('fill', "grey")
+      system_overview.append("text")
+        .attr("x", 1120)
+        .attr("y", 238)
+        .attr("font-weight", "300")
+        .attr("text-anchor", "right")
+        .attr("font-family", "'Poppins','sans-serif'")
+        .attr("font-size", "16px")
+        .text("Total Voltage Injected")
+        .style('fill', "grey")
+
+
+      // Three_menu contains the three-part action menu, giving the user access to toggle_linepower(), linemenu_open(), and sv_on().
+      var three_menu_width = 120;
+      var three_menu_height = 80;
+
+      let three_menu = map_background_svg.append("g")
+        .attr("class", "tooltip")
+        .attr("width", three_menu_width)
+        .attr("height", three_menu_height)
+        .attr("visibility", "hidden")
+        .style("z-index", 99);
+
+      // Add SmartValve button. Upon click, increments +1 to the quantity of the SmartValve of the respective active line.
+      let addsv_button = three_menu.append("g")
+      addsv_button.append("circle")
+        .attr("fill", "white")
+        .attr("cx", "56")
+        .attr("cy", "40")
+        .attr("r", 14)
+        .on("click", sv_on)
+        .on("mouseover", function () { return addsv_button.style("cursor", "pointer") })
+        .style("z-index", 99);
+      addsv_button.append("svg:image")
+        .attr('x', 47)
+        .attr("id", "addsv_button")
+        .attr('y', 29)
+        .attr('width', 19)
+        .attr('height', 21)
+        .attr("xlink:href", "{{url_for('static', filename='images/add_sv.png')}}")
+        .on("mouseover", function () { return addsv_button.style("cursor", "pointer") })
+        .on("click", sv_on)
+        .style("z-index", 99);
+
+      // Line Information button. Upon click, ppens the Line Overview Menu of the respective line.
+      let info_button = three_menu.append("g")
+      info_button.append("circle")
+        .attr("fill", "white")
+        .attr("id", "menu_lineinfo")
+        .attr("cx", "4")
+        .attr("cy", "40")
+        .attr("r", 14)
+        .on("click", show_lineinfo)
+        .on("mouseover", function () { return info_button.style("cursor", "pointer") })
+        .style("z-index", 99);
+      info_button.append("svg:image")
+        .attr('x', -5)
+        .attr('y', 32)
+        .attr('width', 17)
+        .attr('height', 17)
+        .on("click", show_lineinfo)
+        .on("mouseover", function () { return info_button.style("cursor", "pointer") })
+        .attr("xlink:href", "{{url_for('static', filename='images/info_icon.png')}}")
+
+      // Line Power button. Upon click, turns the respective line on/off.
+      let linepower_button = three_menu.append("g")
+      linepower_button.append("circle")
+        .attr("fill", "white")
+        .attr("id", "menu_linepower")
+        .attr("cx", "30")
+        .attr("cy", "10")
+        .attr("r", 14)
+        .style("z-index", 99);
+      linepower_button.append("svg:image")
+        .attr('x', 21)
+        .attr('y', 1)
+        .attr('width', 17)
+        .attr('height', 17)
+        .on("mouseover", function () { return linepower_button.style("cursor", "pointer") })
+        .on("click", toggle_linepower)
+        .attr("xlink:href", "{{url_for('static', filename='images/power_icon.png')}}")
+
+      // Appending UI Elements
+      // Create a button
+      function createButton(svg, x, y, width, height, buttonText, buttonf, input, className, textName) {
+        svg.append("rect")
+          .attr("class", className)
+          .attr("x", x)
+          .attr("y", y)
+          .attr("width", width)
+          .attr("height", height)
+          .attr("rx", 3)
+          .attr("ry", 3)
+          .style("cursor", "pointer")
+          .style('stroke', 'none')
+          .style("color", "white")
+          .style('fill', "grey")
+          .on("click", function (d) {
+            buttonf(input);
+          })
+
+        svg.append("text")
+          .attr("class", textName)
+          .attr("x", x + width / 2)
+          .attr("y", y + height / 2)
+          .text(buttonText)
+          .style("text-anchor", "middle")
+          .style("font-family", "Arial")
+          .style("font-size", "18px")
+          .attr("color", "white")
+          .attr("font-weight", "bold")
+          .style("cursor", "pointer")
+          .style("alignment-baseline", "middle")
+          .on("click", function () {
+            buttonf(input);
+          });
+      }
+
+      //Create a Bus Component, a grey square indicating a connection point for lines to Generators and Loads.
+      function create_bus(x, y, name, grid_voltage, in_service) {
+        grid_elements.append("rect")
+          .attr("x", x)
+          .attr("y", y)
+          .attr("width", 10)
+          .attr("height", 10)
+          .attr('id', name)
+          .attr("fill", function (x) {
+            if (in_service == true) {
+              return "white"
+            }
+            else {
+              return "lightgrey"
+            }
+          }
+          )
+          .attr("stroke", "white")
+          .attr("stroke-width", "1px")
+        return [x, y];
+      }
+
+      function send_data(user_array, password_array) {
+        // $(function(){
+        //   $('button').click(function(){
+        var user = user_array;
+        var pass = password_array;
+
+
+      }
+
+
+      function line_to_index(current_line) {
+        if (current_line == 4) {
+          line_name = "Line 4"
+          corrected_line_index = 0
+        }
+        else if (current_line == 3) {
+          line_name = "Line 3"
+          corrected_line_index = 1
+        }
+        else if (current_line == 2) {
+          line_name = "Line 2"
+          corrected_line_index = 2
+        }
+        else if (current_line == 1) {
+          line_name = "Line 1"
+          corrected_line_index = 3
+        }
+        return corrected_line_index;
+      }
+
+      function to_linemenu_index(corrected_line_index) {
+
+        if (corrected_line_index == 1) {
+          current_line_menu = 3
+        }
+        else if (corrected_line_index == 0) {
+          current_line_menu = 4
+        }
+        else if (corrected_line_index == 2) {
+          current_line_menu = 2
+        }
+        else if (corrected_line_index == 3) {
+          current_line_menu = 1
+        }
+      }
+
+      function lineid_to_lineindex(line_id) {
+        if (line_id == "line3") {
+          line_name = "Line 3"
+          corrected_line_index = 1
+        }
+        else if (line_id == "line4") {
+          line_name = "Line 4"
+          corrected_line_index = 0
+        }
+        else if (line_id == "line2") {
+          line_name = "Line 2"
+          corrected_line_index = 2
+        }
+        else if (line_id == "line1") {
+          line_name = "Line 1"
+          corrected_line_index = 3;
+        }
+      }
+      // Update Functions
+      // Update Functions
+      // Update Functions
+      // Update Functions
+
+
+      function update_tooltip(current_line_menu, json) {
+
+
+        corrected_line_index = line_to_index(current_line_menu);
+
+        line_names_buses.text(json[corrected_line_index]['LineName'])
+        act_power.text("Power: " + json[corrected_line_index]['p_from_mw'] + " MW")
+        current.text("Current: " + json[corrected_line_index]['i_ka'] + " kA")
+        resistance.text("Resistance: " + json[corrected_line_index]['r_ohm_per_km'].toFixed(2) + " Ω/km")
+        final_reactance.text("Reactance: " + json[corrected_line_index]['Xfinal_per_km'].toFixed(2) + " Ω/km")
+        length.text("Length: " + json[corrected_line_index]['Length_km'].toFixed(2) + " km")
+        max_current.text("Maximum Current: " + json[corrected_line_index]['max_i_ka'].toFixed(2) + " kA")
+
+        mvar_per_phase.text(sv_quant_array[current_line_menu - 1] * 10 + " MVar per Phase")
+      }
+
+      function close_menu() {
+        if (menu_vis == 1) {
+          three_menu.style("visibility", "hidden").style("z-index", 100)
+            .transition()
+            .duration(600);
+          addsv_button.style("visibility", "hidden")
+          menu_vis = 0
+        }
+      }
+
+      function update_menu(line_id) {
+        menu_vis = 1;
+
+        three_menu.style("visibility", "visible").style("z-index", 100)
+          .transition()
+          .duration(600);
+        addsv_button.attr("visibility", "visible")
+
+
+        lineid_to_lineindex(line_id);
+
+        to_linemenu_index(corrected_line_index);
+
+        line_power_array.forEach(function (d, i) {
+          if (line_power_array[current_line_menu - 1] == 0) {
+            addsv_button.style("visibility", "hidden")
+          }
+          else if (line_power_array[current_line_menu - 1] == 1) {
+            addsv_button.style("visibility", "visible")
+          }
+        });
+
+        three_menu.attr("transform", "translate(" + (d3.event.pageX - 60) + "," + (d3.event.pageY - 173) + ")");
+
+      }
+      //Line Mouseover Functions
+      function linemouseover1() { // when the line is mousedover
+        d3.selectAll("#line1").style("cursor", "pointer")
+        d3.selectAll("#line1").style("box-shadow", "3px 3px 5px 6px black");
+        d3.selectAll("#line1").style("stroke-width", "5px");
+
+      }
+      function linemouseover2() {
+        d3.selectAll("#line2").style("cursor", "pointer")
+        d3.selectAll("#line2").style("box-shadow", "3px 3px 5px 6px black");
+        d3.selectAll("#line2").style("stroke-width", "5px");
+      }
+      function linemouseover3() {
+        d3.selectAll("#line3").style("cursor", "pointer")
+        d3.selectAll("#line3").style("box-shadow", "3px 3px 5px 6px black");
+        d3.selectAll("#line3").style("stroke-width", "5px");
+      }
+      function linemouseover4() {
+        d3.selectAll("#line4").style("cursor", "pointer")
+        d3.selectAll("#line4").style("box-shadow", "3px 3px 5px 6px black");
+        d3.selectAll("#line4").style("stroke-width", "5px");
+      }
+
+      //line click open menu
+      function linemenu_open() {
+        let line_id = d3.select(this).attr("id")
+        let sv_id = String(line_id + "sv") // line3sv
+        update_menu(line_id)
+      }
+
+      function linemouseoff() {
+        d3.selectAll("#line1").style("stroke-width", "3px");
+        d3.selectAll("#line2").style("stroke-width", "3px");
+        d3.selectAll("#line3").style("stroke-width", "3px");
+        d3.selectAll("#line4").style("stroke-width", "3px");
+      }
+
+      function percent_to_hue(percent, circle_id) {
+        if (percent <= 1) {
+          d3.selectAll("#" + circle_id).attr("fill", "#DEDEDE").transition().duration(800).ease(d3.easeLinear);
+        }
+        else if (percent < 40 && percent > 1) {
+          d3.selectAll("#" + circle_id).attr("fill", zero_forty).transition().duration(800).ease(d3.easeLinear);
+        }
+        else if (percent < 60) {
+          d3.selectAll("#" + circle_id).attr("fill", fourty_sixty).transition().duration(800).ease(d3.easeLinear);
+        }
+        else if (percent < 80) {
+          d3.selectAll("#" + circle_id).attr("fill", sixty_eighty).transition().duration(800).ease(d3.easeLinear);
+        }
+        else if (percent <= 100) {
+          d3.selectAll("#" + circle_id).attr("fill", eighty_hundred).transition().duration(800).ease(d3.easeLinear);
+        }
+        else if (percent > 100) {
+          d3.selectAll("#" + circle_id).attr("fill", over_hundred).transition().duration(800).ease(d3.easeLinear);
+        }
+      }
+
+
+
+      function update_sv() { // click to add an sv
+        let line_id = String("line" + current_line)
+        let active_line_index = Number(current_line) - 1
+
+        corrected_line_index = line_to_index(current_line);
+
+
+        let sv_id = String(line_id + "sv") // #line3sv // CORRECT
+        three_menu.style("visibility", "hidden")
+        addsv_button.style("visibility", "hidden")
+
+        if (line_power_array[Number(current_line) - 1] == Number(0)) {
+          sv_controls.attr("visibility", "hidden")
+        }
+        else if (sv_quant_array[Number(current_line) - 1] == Number(0)) {
+          sv_controls.attr("visibility", "hidden")
+        }
+        else if (sv_quant_array.reduce((a, b) => a + b, 0) == Number(0)) {
+          sv_controls.attr("visibility", "hidden")
+        }
+        else {
+          sv_controls.attr("visibility", "visible")
+        }
+        controls_linename.text(line_name)
+
+        // adding the correct image
+
+        sv_id_array.forEach(function (d, i) {
+          if (d != sv_id) { // if the ID doesn't match
+            if (Number(sv_pushpull_array[i]) == Number(-1)) {
+              d3.selectAll(String("#" + d)).attr("xlink:href", "{{url_for('static', filename='images/pull1.png')}}")
+            }
+            else if (Number(sv_pushpull_array[i]) == Number(1)) {
+              d3.selectAll(String("#" + d)).attr("xlink:href", "{{url_for('static', filename='images/push1.png')}}")
+            }
+          }
+          else {
+            if (Number(sv_pushpull_array[i]) == Number(-1)) {
+              d3.selectAll(String("#" + d)).attr("xlink:href", "{{url_for('static', filename='images/pull_mode.gif')}}")
+            }
+            else if (Number(sv_pushpull_array[i]) == Number(1)) {
+              d3.selectAll(String("#" + d)).attr("xlink:href", "{{url_for('static', filename='images/push_mode.gif')}}")
+            }
+          };
+
+        });
+
+
+        // POST
+        fetch('/', {
+          // Declare what type of data we're sending
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          // Specify the method
+          method: 'POST',
+          // A JSON payload
+          body: JSON.stringify({
+            "LineName": {
+              "0": "Line 4",
+              "1": "Line 3",
+              "2": "Line 2",
+              "3": "Line 1"
+            },
+            "SV": {
+              "0": sv_quant_array[3], // 4
+              "1": sv_quant_array[2], //3
+              "2": sv_quant_array[1],  //2
+              "3": sv_quant_array[0]
+            },
+            "Mode": {
+              "0": sv_pushpull_array[3],
+              "1": sv_pushpull_array[2],
+              "2": sv_pushpull_array[1],
+              "3": sv_pushpull_array[0]
+            },
+            "LineStatus": {
+              "0": line_power_array[3],
+              "1": line_power_array[2],
+              "2": line_power_array[1],
+              "3": line_power_array[0]
+            },
+            "UseSV": {
+              "0": sv_use_array[3],
+              "1": sv_use_array[2],
+              "2": sv_use_array[1],
+              "3": sv_use_array[0]
+            },
+            "Load": {
+              "0": load
+            }
+
+          })
+        }).then(function (response) { // At this point, Flask has printed our JSON
+          return response.json();
+        }).then(function (json) {
+          console.log(json.SVResult)
+          console.log(json.LineResults)
+          update_svinj(json.LineResults)
+          update_systemoverview(json.SVResult, json.LineResults);
+          update_tooltip(current_line_menu, json.LineResults)
+          update_percents(corrected_line_index, json.LineResults);
+        });
+        quantity_count.text(sv_quant_array[Number(current_line) - 1])
+
+      }
+
+
+      function update_systemoverview(SVResults, LineResults) {
+        //added_loading, pushed_mw, pulled_mw,number_sv, sv_capacity, volt_injected
+        // let add_load = ;
+        let additional_loading = load - 1000
+
+        perc1 = LineResults[3]['loading'].toFixed(0)
+        perc2 = LineResults[2]['loading'].toFixed(0)
+        perc3 = LineResults[1]['loading'].toFixed(0)
+        perc4 = LineResults[0]['loading'].toFixed(0)
+
+        console.log(Number(perc4) > 100)
+        added_loading.text(additional_loading + " MW")
+          .style("fill", function () {
+            if ((Number(perc1) > 100 || Number(perc2) > 100 || Number(perc3) > 100 || Number(perc4) > 100) == true) {
+              return "red"
+            }
+            else {
+              return "green"
+            }
+          })
+        pushed_mw.text(SVResults['0'].Mw_Push.toFixed(0) + " MW");
+        pulled_mw.text(SVResults['0'].Mw_Pull.toFixed(0) * -1 + " MW");
+        number_sv.text(SVResults['0'].Num_SV.toFixed(0))
+        sv_capacity.text(SVResults['0'].Perc_used.toFixed(0) + "%")
+        volt_injected.text(SVResults['0'].Total_Vinj.toFixed(1) + " kv")
+      }
+
+      function update_percents(corrected_line_index, LineResults) {
+        //added_loading, pushed_mw, pulled_mw,number_sv, sv_capacity, volt_injected
+        // let add_load = ;
+
+        perc1 = LineResults[3]['loading'].toFixed(0)
+        perc2 = LineResults[2]['loading'].toFixed(0)
+        perc3 = LineResults[1]['loading'].toFixed(0)
+        perc4 = LineResults[0]['loading'].toFixed(0)
+        // d3.selectAll("#percentage1").text(LineResults[corrected_line_index]['loading'] + "%")
+        d3.selectAll("#percentage2").text(perc2 + "%")
+        d3.selectAll("#percentage3").text(perc3 + "%")
+        d3.selectAll("#percentage4").text(perc4 + "%")
+        d3.selectAll("#percentage1").text(perc1 + "%")
+        percent_to_hue(perc1, "circle1")
+        percent_to_hue(perc2, "circle2")
+        percent_to_hue(perc3, "circle3")
+        percent_to_hue(perc4, "circle4")
+
+      }
+      function toggle_linepower() {
+        //flip it
+        let line_id = String("line" + current_line_menu)
+        let sv_id = String(line_id + "sv") // line3sv
+
+        if (line_power_array[Number(current_line_menu) - 1] == Number(0)) { // if it was off before, turn on
+          line_power_array[Number(current_line_menu) - 1] = Number(1);
+          d3.selectAll("#line" + current_line_menu)
+            .attr('stroke-width', "2px")
+            .attr('stroke', "black")
+            .attr("stroke-dasharray", "0")
+          update_svcontrols(sv_id);
+        }
+        else if (line_power_array[Number(current_line_menu) - 1] == Number(1)) { // if it was on, turn off
+          line_power_array[Number(current_line_menu) - 1] = Number(0);
+          sv_quant_array[Number(current_line_menu) - 1] = Number(0); // turn all the Smartvalves Off
+          sv_pushpull_array[Number(current_line_menu) - 1] = Number(0);
+          d3.selectAll("#line" + current_line_menu)
+            .attr('stroke-width', "3px")
+            .attr('stroke', "black")
+            .attr("stroke-dasharray", "2")
+          update_svcontrols(sv_id);
+        }
+
+      }
+
+      function toggle_pushpull() {
+        //flip it
+        let line_id = String("line" + current_line)
+        let sv_id = String(line_id + "sv") // line3sv
+        if (sv_pushpull_array[Number(current_line) - 1] == Number(-1)) {
+          sv_pushpull_array[Number(current_line) - 1] = sv_pushpull_array[Number(current_line) - 1] * -1;
+
+          update_svcontrols(sv_id)
+        }
+        else if (sv_pushpull_array[Number(current_line) - 1] == Number(1)) {
+          sv_pushpull_array[Number(current_line) - 1] = sv_pushpull_array[Number(current_line) - 1] * -1;
+
+          update_svcontrols(sv_id)
+        }
+
+      }
+
+
+      function subtract_quantity() {
+        //flip it
+        let line_id = String("line" + current_line)
+        let sv_id = String(line_id + "sv") // take this number and subtract one
+        sv_quant_array[Number(current_line) - 1] = sv_quant_array[Number(current_line) - 1] - Number(1);
+
+        if (sv_quant_array[Number(current_line) - 1] <= Number(0)) {
+          sv_quant_array[Number(current_line) - 1] = 0;
+          sv_pushpull_array[Number(current_line) - 1] = 0;
+
+        }
+        quantity_count.text(sv_quant_array[Number(current_line) - 1])
+        update_svcontrols(sv_id)
+
+      }
+
+      function add_quantity() {
+        //flip it
+        let line_id = String("line" + current_line)
+        let sv_id = String(line_id + "sv") // line3sv
+        if (line_power_array[current_line - 1] == 1) {
+
+          if (sv_quant_array[Number(current_line) - 1] == 0) {
+            sv_on()
+          }
+          else {
+            sv_quant_array[Number(current_line) - 1] = sv_quant_array[Number(current_line) - 1] + 1;
+            quantity_count.text(sv_quant_array[Number(current_line) - 1])
+          }
+
+          update_svcontrols(sv_id)
+        }
+      }
+
+      function update_svcontrols(sv_id) {
+
+        if (sv_id == "line1sv") {
+          line_name = "Line 1"
+          current_line = 1
+          console.log("line 1 on")
+        }
+        else if (sv_id == "line2sv") {
+          line_name = "Line 2"
+          current_line = 2
+        }
+        else if (sv_id == "line3sv") {
+          line_name = "Line 3"
+          current_line = 3
+        }
+        else if (sv_id == "line4sv") {
+          line_name = "Line 4"
+          current_line = 4
+        }
+
+        if (sv_quant_array[Number(current_line) - 1] == Number(0)) {
+          d3.selectAll("#" + sv_id).style("visibility", "hidden")
+        }
+        else if (sv_quant_array[Number(current_line) - 1] > 0) {
+          d3.selectAll("#" + sv_id).style("visibility", "visible")
+        }
+
+        if (line_power_array[Number(current_line) - 1] == Number(0)) {
+          sv_controls.attr("visibility", "hidden")
+        }
+
+        if (sv_pushpull_array[Number(current_line) - 1] == Number(-1)) {
+          pushpull_button.attr("cx", 143);
+          sv_controls.style("visibility", "visible");
+        }
+        else if (sv_pushpull_array[Number(current_line) - 1] == Number(1)) {
+          pushpull_button.attr("cx", 183);
+          sv_controls.style("visibility", "visible");
+        }
+        else if (sv_pushpull_array[Number(current_line) - 1] == Number(0)) {
+          sv_controls.style("visibility", "hidden");
+
+        }
+
+        update_sv();
+
+      }
+
+      function update_svinj(the_json) {
+        line_to_index(current_line_menu);
+        if (sv_pushpull_array[current_line_menu - 1] == -1) {
+          vinj_controls.text("Voltage Injected: " + "-" + the_json[corrected_line_index]['Vinj'] + " kv");
+        }
+        else {
+          vinj_controls.text("Voltage Injected: " + the_json[corrected_line_index]['Vinj'] + " kv");
+        }
+      }
+
+      function sv_on() {
+
+        let line_id = String("line" + current_line_menu) //line3
+        let sv_id = String(line_id + "sv") // line3sv
+        d3.selectAll(String("#" + sv_id))
+          .attr("visibility", "visible")
+        three_menu.style("visibility", "hidden")
+        addsv_button.style("visibility", "hidden")
+
+        if (current_line_menu == 2) {
+          percent = perc2
+        }
+        else if (current_line_menu == 3) {
+          percent = perc3
+        }
+        else if (current_line_menu == 4) {
+          percent = perc4
+        }
+        else if (current_line_menu == 1) {
+          percent = perc1
+        }
+
+        if (percent < 100) {
+          sv_pushpull_array[Number(current_line_menu - 1)] = Number(-1)
+        }
+        else if (percent >= 100) {
+          sv_pushpull_array[Number(current_line_menu - 1)] = Number(1)
+        }
+        sv_quant_array[Number(current_line_menu - 1)] = sv_quant_array[Number(current_line_menu - 1)] + Number(1)
+
+        var sliderval = sv_use_array[Number(current_line_menu) - 1] * 100
+        sliderStep.value(sliderval);
+
+        update_svcontrols(sv_id);
+      }
+
+
+      function switch_svcontrol() {
+        let this_id = d3.select(this).attr("id")
+        current_line_menu = this_id[4]
+
+        quantity_count.text(sv_quant_array[Number(current_line_menu) - 1])
+
+        var sliderval = sv_use_array[Number(current_line_menu) - 1] * 100
+        sliderStep.value(sliderval);
+
+        if (sv_pushpull_array[current_line_menu - 1] == -1) {
+          pushpull_button.attr("cx", 143);
+        }
+        else if (sv_pushpull_array[current_line_menu - 1] == 1) {
+          pushpull_button.attr("cx", 183);
+        }
+
+        console.log(current_line_menu + " switched")
+        update_svcontrols(this_id)
+      }
+
+
+      function sv_off() {
+        // console.log("sv turned off")
+        let line_id = String("line" + current_line)
+        let sv_id = String(line_id + "sv") // line3sv
+        d3.selectAll(String("#" + sv_id))
+          .style("visibility", "hidden")
+        three_menu.style("visibility", "hidden")
+        addsv_button.attr("xlink:href", "{{url_for('static', filename='images/add_sv.png')}}")
+        sv_controls.style("visibiliity", "hidden")
+        sv_quant_array[Number(current_line - 1)] = Number(0)
+        sv_pushpull_array[Number(current_line - 1)] = Number(0)
+
+        update_svcontrols(sv_id);
+      }
+
+
+      // CREATE LINE 1
+      function create_line_1(from_bus, to_bus, elbow, percentage, location, std_type, name, in_service) {
+
+        let line1 = grid_elements.append("line")
+          .attr('x1', from_bus[0] + 5)
+          .attr('y1', from_bus[1] + 10)
+          .attr('x2', elbow[0] + Number(2))
+          .attr('y2', elbow[1] - Number(2))
+          .attr('z-index', 1)
+          .attr("id", "line1")
+          .attr('stroke-width', "3px")
+          .attr("stroke-dasharray", "2")
+          .attr('stroke', "slategrey")
+          .on("click", linemenu_open)
+          .on("mouseover", linemouseover1)
+          .on("mouseout", linemouseoff)
+
+        let line2 = grid_elements.append("line")
+          .attr('x1', elbow[0] + Number(2))
+          .attr('y1', elbow[1] - 2)
+          .attr('x2', to_bus[0])
+          .attr('y2', to_bus[1] + 7)
+          .attr('z-index', 1)
+          .attr("id", "line1")
+          .attr('stroke-width', "3px")
+          .attr("stroke-dasharray", "2")
+          .attr('stroke', "slategrey")
+          .on("click", linemenu_open)
+          .on("mouseover", linemouseover1)
+          .on("mouseout", linemouseoff)
+
+        grid_elements.append("circle")
+          .attr("cx", (elbow[0]))
+          .attr("cy", (elbow[1]))
+          .attr("r", 13)
+          .attr("id", "circle1")
+          .attr("fill", "#DEDEDE")
+
+        let percentage1 = grid_elements.append("text")
+          .attr("x", (elbow[0] - 8))
+          .attr("y", (elbow[1] + 3))
+          .attr("font-size", "10px")
+          .attr("id", "percentage1")
+          .attr("font-family", "Arial")
+          .attr("font-weight", "bold")
+          .text(Math.round(percentage) + "%");
+
+        //SMARTVALVE: begins hidden 
+        let sv1 = grid_elements.append("svg:image")
+          .attr('x', elbow[0] + 17)
+          .attr('y', elbow[1] - 8)
+          .attr('id', 'line1sv')
+          .attr('width', 32)
+          .attr('height', 32)
+          .on("click", switch_svcontrol)
+          .attr("visibility", "hidden")
+      }
+
+      // CREATE LINE 2
+      function create_line_2(from_bus, to_bus, elbow, percentage, location, std_type, name, in_service) {
+
+        let line3 = grid_elements.append("line")
+          .attr('x1', from_bus[0] + 5)
+          .attr('y1', from_bus[1] + 10)
+          .attr('x2', elbow[0] + Number(2))
+          .attr('y2', elbow[1] - Number(2))
+          .attr('z-index', "0")
+          .attr("id", "line2")
+          .attr('stroke-width', "3px")
+          .attr('stroke', "black")
+          .on("click", linemenu_open)
+          .on("mouseover", linemouseover2)
+          .on("mouseout", linemouseoff)
+
+        let line4 = grid_elements.append("line")
+          .attr('x1', elbow[0] + Number(2))
+          .attr('y1', elbow[1] - 2)
+          .attr('x2', to_bus[0])
+          .attr('y2', to_bus[1] + 7)
+          .attr('z-index', "0")
+          .attr("id", "line2")
+          .attr('stroke-width', "3px")
+          .attr('stroke', "black")
+          .on("click", linemenu_open)
+          .on("mouseover", linemouseover2)
+          .on("mouseout", linemouseoff)
+
+        grid_elements.append("circle")
+          .attr("cx", (elbow[0] - Number(4)))
+          .attr("cy", (elbow[1] - 12))
+          .attr("r", 13)
+          .attr("id", "circle2")
+          .attr("fill", zero_forty);
+
+        let percentage2 = grid_elements.append("text")
+          .attr("x", (elbow[0] - Number(7) - 7))
+          .attr("y", (elbow[1] - 9))
+          .attr("font-size", "10px")
+          .attr("font-family", "Arial")
+          .attr("id", "percentage2")
+          .attr("font-weight", "bold")
+          .text(Math.round(percentage) + "%");
+
+
+        //SMARTVALVE: begins hidden 
+        let sv2 = grid_elements.append("svg:image")
+          .attr('x', elbow[0] + 18)
+          .attr('y', elbow[1] + 10)
+          .attr('id', 'line2sv')
+          .attr('width', 32)
+          .attr('height', 32)
+          .on("click", switch_svcontrol)
+          .attr("visibility", "hidden")
+
+      }
+
+
+      // CREATE LINE 3
+      function create_line_3(from_bus, to_bus, elbow, percentage, location, std_type, name, in_service) {
+
+        let line5 = grid_elements.append("line")
+          .attr('x1', from_bus[0] + 5)
+          .attr('y1', from_bus[1] + 10)
+          .attr('x2', elbow[0] + Number(2))
+          .attr('y2', elbow[1] - Number(2))
+          .attr('z-index', 0)
+          .attr('stroke-width', "3px")
+          .attr('stroke', "black")
+          .attr("id", "line3")
+          .on("click", linemenu_open)
+          .on("mouseover", linemouseover3)
+          .on("mouseout", linemouseoff)
+
+        let line6 = grid_elements.append("line")
+          .attr('x1', elbow[0] + Number(2))
+          .attr('y1', elbow[1] - 2)
+          .attr('x2', to_bus[0])
+          .attr('y2', to_bus[1] + 7)
+          .attr('z-index', 0)
+          .attr("id", "line3")
+          .attr('stroke-width', "3px")
+          .attr('stroke', "black")
+          .on("click", linemenu_open)
+          .on("mouseover", linemouseover3)
+          .on("mouseout", linemouseoff)
+
+        grid_elements.append("circle")
+          .attr("cx", (elbow[0] - Number(5)))
+          .attr("cy", (elbow[1] - 8))
+          .attr("r", 13)
+          .attr("id", "circle3")
+          .attr("fill", zero_forty);
+
+        let percentage3 = grid_elements.append("text")
+          .attr("x", (elbow[0] - Number(28) + 14))
+          .attr("y", (elbow[1] - 4))
+          .attr("font-size", "10px")
+          .attr("font-family", "Arial")
+          .attr("font-weight", "bold")
+          .attr("id", "percentage3")
+          .text(percentage + "%");
+
+        //SMARTVALVE: begins hidden 
+        let sv3 = grid_elements.append("svg:image")
+          .attr('x', elbow[0] + 11)
+          .attr('y', elbow[1] + 22)
+          .attr('id', 'line3sv')
+          .attr('width', 32)
+          .attr('height', 32)
+          .attr("visibility", "hidden")
+          .on("click", switch_svcontrol)
+      }
+
+      // CREATE LINE 4
+      function create_line_4(from_bus, to_bus, elbow, percentage, location, std_type, name, in_service) {
+
+        let line7 = grid_elements.append("line")
+          .attr('x1', from_bus[0] + 5)
+          .attr('y1', from_bus[1] + 10)
+          .attr('x2', elbow[0] + Number(2))
+          .attr('y2', elbow[1] - Number(2))
+          .attr('z-index', 0)
+          .attr("id", "line4")
+          .attr('stroke-width', "3px")
+          .attr('stroke', "black")
+          .on("click", linemenu_open)
+          .on("mouseover", linemouseover4)
+          .on("mouseout", linemouseoff)
+
+        let line8 = grid_elements.append("line")
+          .attr('x1', elbow[0] + Number(2))
+          .attr('y1', elbow[1] - 2)
+          .attr('x2', to_bus[0])
+          .attr('y2', to_bus[1] + 7)
+          .attr("id", "line4")
+          .attr('z-index', 0)
+          .attr('stroke-width', "3px")
+          .attr('stroke', "black")
+          .on("click", linemenu_open)
+          .on("mouseover", linemouseover4)
+          .on("mouseout", linemouseoff)
+
+        grid_elements.append("circle")
+          .attr("cx", (elbow[0] - Number(5)))
+          .attr("cy", (elbow[1] - 7))
+          .attr("r", 13)
+          .attr("id", "circle4")
+          .attr("fill", over_hundred)
+        // .attr("stroke", "white")
+        // .attr("stroke-width", "1px");
+
+        let percentage4 = grid_elements.append("text")
+          .attr("x", (elbow[0] - Number(17)))
+          .attr("y", (elbow[1] - 3))
+          .attr("font-size", "10px")
+          .attr("font-family", "Arial")
+          .attr("font-weight", "bold")
+          .attr("id", "percentage4")
+          .text(Math.round(percentage) + "%");
+
+        //SMARTVALVE: begins hidden 
+        let sv4 = grid_elements.append("svg:image")
+          .attr('x', elbow[0])
+          .attr('y', elbow[1] + 25)
+          .attr('id', 'line4sv')
+          .attr('width', 32)
+          .attr('height', 32)
+          .attr("visibility", "hidden")
+          .on("click", switch_svcontrol)
+      }
+
+
+      // Create a Load
+      function create_load(x, y, bus, active_power, reactive_power, name) {
+        grid_elements.append("circle")
+          .attr("cx", x + 6)
+          .attr("cy", y + 6)
+          .attr("r", 14)
+          .attr('id', name)
+          .attr("fill", "none")
+          .attr("stroke", "white")
+          .attr("stroke-width", "1.5px")
+        grid_elements.append("svg:image")
+          .attr('x', Number(Number(x) - Number(7.25)))
+          .attr('y', Number(Number(y) - Number(8)))
+          .attr('id', id)
+          .attr('width', 27)
+          .attr('height', 27)
+          .attr("xlink:href", "{{url_for('static', filename='images/load2.gif')}}")
+
+        var load_menu = grid_elements.append("g")
+          .attr("class", "load_menu")
+          .attr("id", "load_menu")
+          .style("z-index", 99);
+
+        grid_elements.append("rect")
+          .attr("x", x - 16)
+          .attr("y", y - 28)
+          .attr("width", 43)
+          .attr("height", 15)
+          .attr("rx", 3)
+          .attr("ry", 3)
+          .attr("fill", "white")
+
+        let load_plus = load_menu.append("rect")
+          .attr("x", x + 30)
+          .attr("y", y - 28)
+          .attr("width", 15)
+          .attr("height", 15)
+          .attr("rx", 3)
+          .attr("ry", 3)
+          .attr("fill", "white")
+          .style("z-index", 99)
+          .style("visibility", "hidden")
+          .on("mouseover", function () { return load_add.style("cursor", "pointer") });
+        ;
+
+        let load_minus = load_menu.append("rect")
+          .attr("x", x - 33)
+          .attr("y", y - 28)
+          .attr("width", 15)
+          .attr("height", 15)
+          .attr("rx", 3)
+          .attr("ry", 3)
+          .attr("fill", "white")
+          .style("z-index", 99)
+          .style("visibility", "hidden")
+          .on("mouseover", function () { return load_subtract.style("cursor", "pointer") });
+        ;
+
+
+        var load_add = load_menu.append("text")
+          .attr("x", x + 33)
+          .attr("y", y - 16)
+          .attr("id", "load_increase")
+          .attr("font-family", "'Poppins','sans-serif'")
+          .text("+")
+          .attr("font-size", "13px")
+          .style("visibility", "hidden")
+          .on("click", function () {
+            load = load + 50;
+            d3.selectAll("#load_quantity").text(load + " MW")
+            update_sv()
+
+            console.log(load)
+          })
+          .on("mouseover", function () { return load_add.style("cursor", "pointer") });
+
+        var load_subtract = load_menu.append("text")
+          .attr("x", x - 30)
+          .attr("y", y - 16)
+          .attr("id", "load_decrease")
+          .attr("font-family", "'Poppins','sans-serif'")
+          .text("-")
+          .style("visibility", "hidden")
+          .attr("font-size", "13px")
+          .on("click", function () {
+            load = load - 50;
+            d3.selectAll("#load_quantity").text(load + " MW")
+            update_sv()
+            console.log(load)
+          })
+          .on("mouseover", function () { return load_subtract.style("cursor", "pointer") });
+
+
+        var load_quantity = grid_elements.append("text")
+          .attr("x", x - 14)
+          .attr("y", y - 18)
+          .attr("id", "load_quantity")
+          .attr("font-family", "'Poppins','sans-serif'")
+          .text(load + " MW")
+          .attr("font-size", "9px")
+          .on("click", function () {
+            load_plus.style("visibility", "visible")
+            load_minus.style("visibility", "visible")
+            load_add.style("visibility", "visible")
+            load_subtract.style("visibility", "visible")
+            console.log("clicked")
+          })
+          .on("mouseover", function () { return load_quantity.style("cursor", "pointer") });
+
+      }
+
+
+
+
+      // Create a Generator
+      function create_gen(x, y, bus, type, active_power, reactive_power, voltage_pt, slack) {
+        grid_elements.append("circle")
+          .attr("cx", x)
+          .attr("cy", y)
+          .attr("r", 13)
+          .attr('id', name)
+          .attr("fill", "lightblue")
+          .attr("stroke", "white")
+          .attr("stroke-width", "1px")
+
+        // grid_elements.append("rect")
+        //   .attr("x", x - 16)
+        //   .attr("y", y - 35)
+        //   .attr("width", 40)
+        //   .attr("height", 15)
+        //   .attr("rx", 3)
+        //   .attr("ry", 3)
+        //   .attr("fill", "white")
+
+        // grid_elements.append("text")
+        //   .attr("x", x - 14)
+        //   .attr("y", y - 25)
+        //   .attr("font-family", "'Poppins','sans-serif'")
+        //   .text("1015 MW")
+        //   .attr("font-size", "9px")
+
+        if (type == "wind") {
+          grid_elements.append("svg:image")
+            .attr('x', Number(Number(x) - Number(12.5)))
+            .attr('y', Number(Number(y) - Number(12.5)))
+            .attr('id', id)
+            .attr('width', 25)
+            .attr('height', 25)
+            .attr("xlink:href", "{{url_for('static', filename='images/wind_turbine.gif')}}")
+        }
+
+
+      }
+
+      // create buses
+      var b1 = create_bus(570, 180, id = "b1", name = "Bus 1", grid_voltage = 275, in_service = true)
+      var b2 = create_bus(740, 390, id = "b2", name = "Bus 2", grid_voltage = 275, in_service = true)
+
+      // //create generator
+      var g1 = create_gen(570, 160, b1, type = "wind", 950, 1.01, true)
+
+      var line1 = create_line_1(b1, b2, [596, 380], percentage = INFOLINES[3].loading.toFixed(0), std_type = "LineA", name = "Line 1", in_service = true)
+      var line2 = create_line_2(b1, b2, [635, 320], percentage = INFOLINES[2].loading.toFixed(0), std_type = "LineB", name = "Line 2", in_service = true)
+      var line3 = create_line_3(b1, b2, [678, 280], percentage = INFOLINES[1].loading.toFixed(0), std_type = "LineC", name = "Line 3", in_service = true)
+      var line4 = create_line_4(b1, b2, [700, 210], percentage = INFOLINES[0].loading.toFixed(0), std_type = "LineD", name = "Line 4", in_service = true)
+
+      // //create load elements
+      var l1 = create_load(764, 387, b1, 890, 80, name = "Load")
+
+
+    }
+
+    requestData(); // execute
+
+
+  </script>
+  <div></div>
+
+
+
+</body><br></br>
+<div>Icons made by <a href="https://www.flaticon.co">Flaticon</a>
